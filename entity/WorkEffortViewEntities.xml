@@ -269,6 +269,8 @@ along with this software (see the LICENSE.md file). If not, see
         <alias name="assetFromDate" entity-alias="WEP" field="fromDate"/>
         <alias name="assetThruDate" entity-alias="WEP" field="thruDate"/>
         <alias name="teamMemberPartyId" entity-alias="TPR" field="fromPartyId"/>
+        <alias name="teamMemberFromDate" entity-alias="TPR" field="fromDate"/>
+        <alias name="teamMemberThruDate" entity-alias="TPR" field="thruDate"/>
         <relationship type="one" title="WorkEffortPurpose" related="moqui.basic.Enumeration">
             <key-map field-name="purposeEnumId"/></relationship>
     </view-entity>
