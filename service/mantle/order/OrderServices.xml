@@ -2751,7 +2751,7 @@ General Order Placement and eCommerce Usage
             <parameter name="productStoreId" default="null"/>
 
             <!-- mantle.shipment.ShipmentServices.create#OrderPartShipment parameters -->
-            <parameter name="createPackage" type="Boolean" default="false"/>
+            <parameter name="createPackage" type="Boolean" default="true"><description>Service defaults to false, but we need it to create a package</description></parameter>
             <parameter name="createRouteSegment" type="Boolean" default="true"/>
             <parameter name="originFacilityId"/>
             <parameter name="destinationFacilityId"/>
@@ -2966,7 +2966,7 @@ General Order Placement and eCommerce Usage
                         </entity-find>
                         <!-- very unlikely to have multiple results -->
                         <set field="shipmentItemSource" from="shipmentItemSourceMap.getFirst()"/>
-                        <if condition="!shipmentItemSource.shipmentItemSourceId">
+                        <if condition="!shipmentItemSource?.shipmentItemSourceId">
                             <log level="warn" message="No ShipmentItemSource found for OrderItem ${orderItem.orderItemSeqId} in OrderPart ${orderPartSeqId} for shipment ${orderPartShipment.shipmentId}"/>
                             <continue/>
                         </if>
@@ -2978,12 +2978,15 @@ General Order Placement and eCommerce Usage
                             shipmentItemSourceId:shipmentItemSource.shipmentItemSourceId]" out-map="context"/>
                         <set field="orderItemIdList.find { it.orderPartSeqId == orderPartSeqId &amp;&amp; it.orderItemSeqId == orderItem.orderItemSeqId }?.assetReceiptId" from="assetReceiptId"/>
 
-                        <if condition="autoScheduleShipment">
-                            <service-call name="update#mantle.shipment.Shipment" in-map="[shipmentId:orderPartShipment.shipmentId, statusId:'ShipScheduled']"/>
-                        </if>
-                        <!-- This is a possible place for external vendors to hook into the process, using batch-mode or on-the-fly ECAs.
-                            - Status transitions could be: error, received, or completed -->
+                        <!-- Add shipmentItem to package -->
+                        <service-call name="mantle.shipment.ShipmentServices.add#ItemToPackage" in-map="[shipmentId:orderPartShipment.shipmentId,
+                            shipmentPackageSeqId:orderPartShipment.shipmentPackageSeqId, productId:orderItem.productId, quantity:shipmentItemSource.quantity]"/>
                     </iterate>
+                    <if condition="autoScheduleShipment">
+                        <service-call name="update#mantle.shipment.Shipment" in-map="[shipmentId:orderPartShipment.shipmentId, statusId:'ShipScheduled']"/>
+                    </if>
+                    <!-- This is a possible place for external vendors to hook into the process, using batch-mode or on-the-fly ECAs.
+                        - Status transitions could be: error, received, or completed -->
                 </iterate>
             </if>
         </actions>
@@ -2992,41 +2995,150 @@ General Order Placement and eCommerce Usage
     <service verb="finalize" noun="DropShipPurchaseOrder">
         <description>This service is meant to be called when the external drop-ship vendor has finalized or otherwise completed their part of the order processing.
 
-This implements the second half of the drop-ship PO process. It will need to finalize the PO, and then reflect needed bits back into the SO.</description>
+This implements the second half of the drop-ship PO process. It will need to finalize the PO, and then reflect needed bits back into the SO.
+
+Note: This is a first pass on this service, and will be changed in the future.</description>
         <in-parameters>
             <parameter name="purchaseOrderId" required="true"/>
             <parameter name="orderPartSeqId" required="true"/>
-            <parameter name="productQuantityList" type="List" default="[[productId:'100898',quantity:499]]">
+            <parameter name="productQuantityList" type="List" default="[[productId:'100890']]">
                 <parameter name="productId"/>
                 <parameter name="quantity" type="BigDecimal"/>
             </parameter>
             <parameter name="trackingCode"/>
+            
+            <parameter name="autoShipShipment" type="Boolean" default="true"/>
+<!--            <parameter name="autoDeliverShipment" type="Boolean" default="true" required="true"/>-->
         </in-parameters>
         <out-parameters>
+            <parameter name="needsToAndHasSetTrackingCode" type="Boolean"/>
+            <parameter name="setTrackingCodeShipmentPackageRouteSegList" type="List"/>
+            <parameter name="updatedShipmentIdList" type="List"/>
         </out-parameters>
         <actions>
+            <set field="orderId" from="purchaseOrderId"/>
+            <set field="needsToAndHasSetTrackingCode" from="trackingCode ? false : true"/>
+            <set field="setTrackingCodeShipmentPackageRouteSegList" from="[]"/>
+            <set field="updatedShipmentIdList" from="[]"/>
+
             <iterate list="productQuantityList" entry="productQuantity">
+                <set field="productId" from="productQuantity.productId"/>
+                <set field="quantity" from="productQuantity.quantity"/>
                 <entity-find entity-name="mantle.order.OrderItem" list="orderItemList" for-update="true">
-                    <econdition field-name="orderId" from="purchaseOrderId"/>
-                    <econdition field-name="orderPartSeqId" from="orderPartSeqId"/>
-                    <econdition field-name="productId" from="productQuantity.productId"/>
+                    <econdition field-name="orderId"/>
+                    <econdition field-name="orderPartSeqId"/>
+                    <econdition field-name="productId"/>
                 </entity-find>
                 <if condition="orderItemList.size() == 0">
                     <log level="warn" message="No OrderItem found for productId ${productQuantity.productId} in Order ${purchaseOrderId}"/>
                     <continue/>
                 </if>
-                <if condition="orderItemList.size() == 1">
-                    <set field="orderItem" from="orderItemList.get(0)"/>
+                <set field="orderItem" from="orderItemList.get(0)"/>
+                <if condition="productQuantity.quantity &amp;&amp; orderItemList.size() == 1">
                     <set field="orderItem.quantity" from="productQuantity.quantity"/>
                     <entity-update value-field="orderItem"/>
                 </if>
                 <if condition="orderItemList.size() &gt; 1">
                     <return type="danger" message="Cannot update or finalize Dropship Purchase Order. Multiple OrderItems found for productId ${productQuantity.productId} in Order ${purchaseOrderId}"/>
                 </if>
+                <set field="orderItemSeqId" from="orderItem.orderItemSeqId"/>
                 <!-- This also updates ShipmentItem and ShipmentItemSource -->
-                <service-call name="mantle.order.OrderServices.update#OrderItem" in-map="[orderId:purchaseOrderId,
-                    orderItemSeqId:orderItem.orderItemSeqId, quantity:productQuantity.quantity]"/>
+                <entity-find entity-name="mantle.shipment.ShipmentItemSource" list="shipmentItemSourceList" limit="2" for-update="true">
+                    <econdition field-name="orderId"/>
+                    <econdition field-name="orderItemSeqId"/>
+                    <econdition field-name="productId"/>
+                    <order-by field-name="-lastUpdatedStamp"/></entity-find>
+                <if condition="shipmentItemSourceList.size() == 0">
+                    <log level="warn" message="No ShipmentItemSource found for OrderItem ${orderItemSeqId} in Order ${purchaseOrderId} for product ${productId}"/>
+                    <continue/>
+                </if>
+                <if condition="shipmentItemSourceList.size() &gt; 1">
+                    <return type="danger" message="Cannot update or finalize Dropship Purchase Order. Multiple ShipmentItemSource found for OrderItem ${orderItemSeqId} in Order ${purchaseOrderId} for product ${productId}"/>
+                </if>
+                <!-- TODO: If a ShipmentItemSource is the connection between the ShipmentItem and the Order here then should we edit the quantity in the ShipmentItemSource? see: https://moqui.org/m/docs/mantle/Mantle+Structure+and+UDM/Shipment#shipment-mantleshipment -->
+                <!-- Basically the relationship between Order -> ShipmentItemSource -> ShipmentItem is not 1:1:1 all the time and this code assumes it is based on the parameters -->
+                <set field="shipmentItemSource" from="shipmentItemSourceList.getFirst()"/>
+                <if condition="shipmentItemSource.shipmentId">
+                    <set field="updatedShipmentIdList" from="updatedShipmentIdList + shipmentItemSource.shipmentId"/>
+                </if>
+
+                <if condition="productQuantity.quantity &amp;&amp; shipmentItemSource.quantity != productQuantity.quantity">
+                    <set field="shipmentItemSource.quantity" from="productQuantity.quantity"/>
+                    <set field="shipmentItemSource.quantityNotHandled" from="productQuantity.quantity"/>
+                    <entity-update value-field="shipmentItemSource"/>
+                </if>
+
+                <entity-find-one entity-name="mantle.shipment.ShipmentItem" value-field="shipmentItem" for-update="true"
+                    auto-field-map="[shipmentId:shipmentItemSource.shipmentId, productId:productId]"/>
+                <if condition="!shipmentItem">
+                    <log level="warn" message="No ShipmentItem found for OrderItem ${orderItemSeqId} in Order ${purchaseOrderId} for product ${productId}"/>
+                    <continue/>
+                </if>
+
+                <if condition="productQuantity.quantity &amp;&amp; shipmentItem.quantity != productQuantity.quantity">
+                    <set field="shipmentItem.quantity" from="productQuantity.quantity"/>
+                    <entity-update value-field="shipmentItem"/>
+                </if>
+
+                <entity-find entity-name="mantle.shipment.ShipmentPackageContent" list="shipmentPackageContentList" for-update="true">
+                    <econdition field-name="shipmentId" from="shipmentItemSource.shipmentId"/>
+                    <econdition field-name="productId"/>
+                    <order-by field-name="-lastUpdatedStamp"/>
+                </entity-find>
+                <if condition="shipmentPackageContentList.size() == 0">
+                    <log level="warn" message="No ShipmentPackageContent found for OrderItem ${orderItemSeqId} in Order ${purchaseOrderId} for product ${productId}"/>
+                </if>
+                <if condition="shipmentPackageContentList.size() &gt; 1">
+                    <return type="danger" message="Cannot update or finalize Dropship Purchase Order. Multiple ShipmentPackageContent found for OrderItem ${orderItemSeqId} in Order ${purchaseOrderId} for product ${productId}"/>
+                </if>
+
+                <if condition="shipmentPackageContentList.size() == 1">
+                    <set field="shipmentPackageContent" from="shipmentPackageContentList.getFirst()"/>
+                    <if condition="productQuantity.quantity &amp;&amp; shipmentPackageContent.quantity != productQuantity.quantity">
+                        <set field="shipmentPackageContent.quantity" from="productQuantity.quantity"/>
+                        <entity-update value-field="shipmentPackageContent"/>
+                    </if>
+
+                    <if condition="trackingCode">
+                        <!-- Only update tracking codes that are null -->
+                        <entity-find entity-name="mantle.shipment.ShipmentPackageRouteSeg" list="shipmentPackageRouteSegList" for-update="true">
+                            <econdition field-name="shipmentId" from="shipmentItemSource.shipmentId"/>
+                            <econdition field-name="shipmentPackageSeqId" from="shipmentPackageContent.shipmentPackageSeqId"/>
+                            <econdition field-name="trackingCode" or-null="true"/>
+                            <order-by field-name="-lastUpdatedStamp"/></entity-find>
+                        <iterate list="shipmentPackageRouteSegList" entry="shipmentPackageRouteSeg">
+                            <if condition="setTrackingCodeShipmentPackageRouteSegList.contains([shipmentId:shipmentItemSource.shipmentId,
+                                shipmentPackageSeqId:shipmentPackageContent.shipmentPackageSeqId, shipmentRouteSegmentSeqId:shipmentPackageRouteSeg.shipmentRouteSegmentSeqId])">
+                                <continue/>
+                            </if>
+                            <if condition="shipmentPackageRouteSeg.trackingCode != trackingCode">
+                                <set field="shipmentPackageRouteSeg.trackingCode" from="trackingCode"/>
+                                <entity-update value-field="shipmentPackageRouteSeg"/>
+                                <set field="setTrackingCodeShipmentPackageRouteSegList" from="setTrackingCodeShipmentPackageRouteSegList
+                                    + [shipmentId:shipmentItemSource.shipmentId, shipmentPackageSeqId:shipmentPackageContent.shipmentPackageSeqId,
+                                    shipmentRouteSegmentSeqId:shipmentPackageRouteSeg.shipmentRouteSegmentSeqId]"/>
+                            </if>
+                            <set field="needsToAndHasSetTrackingCode" from="true"/>
+                        </iterate>
+                    </if>
+                </if>
+
+                <if condition="shipmentItemSource.shipmentId">
+                    <if condition="!updatedShipmentIdList.contains(shipmentItemSource.shipmentId)">
+                        <set field="updatedShipmentIdList" from="updatedShipmentIdList + shipmentItemSource.shipmentId"/>
+                    </if>
+                </if>
             </iterate>
+
+            <if condition="!needsToAndHasSetTrackingCode">
+                <log level="warn" message="trackingCode is set, but cannot be updated"/>
+            </if>
+
+            <if condition="autoShipShipment">
+                <iterate list="updatedShipmentIdList" entry="shipmentId">
+                    <service-call name="mantle.shipment.ShipmentServices.ship#Shipment" in-map="[shipmentId:shipmentId]"/>
+                </iterate>
+            </if>
         </actions>
     </service>
 </services>
