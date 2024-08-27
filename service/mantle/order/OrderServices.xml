@@ -3008,6 +3008,7 @@ Note: This is a first pass on this service, and will be changed in the future.</
             <parameter name="trackingCode"/>
             
             <parameter name="autoShipShipment" type="Boolean" default="true"/>
+            <parameter name="autoAssocSalesShipment" type="Boolean" default="true"/>
 <!--            <parameter name="autoDeliverShipment" type="Boolean" default="true" required="true"/>-->
         </in-parameters>
         <out-parameters>
@@ -3138,6 +3139,62 @@ Note: This is a first pass on this service, and will be changed in the future.</
                 <iterate list="updatedShipmentIdList" entry="shipmentId">
                     <service-call name="mantle.shipment.ShipmentServices.ship#Shipment" in-map="[shipmentId:shipmentId]"/>
                 </iterate>
+            </if>
+
+            <if condition="autoAssocSalesShipment">
+                <entity-find-one entity-name="mantle.order.OrderHeader" value-field="purchaseOrder" for-update="true"
+                        auto-field-map="[orderId:purchaseOrderId]"/>
+                <if condition="!purchaseOrder">
+                    <return type="danger" message="No Order found for orderId ${purchaseOrderId}"/>
+                </if>
+                <if condition="purchaseOrder.parentOrderId"><then>
+                    <entity-find-one entity-name="mantle.order.OrderHeader" value-field="salesOrder" for-update="true">
+                        <field-map field-name="orderId" from="purchaseOrder.parentOrderId"/></entity-find-one>
+                    <if condition="salesOrder"><then>
+                        <!-- Copy ShipmentItemSource from PurchaseOrder to SalesOrder -->
+                        <entity-find entity-name="mantle.shipment.ShipmentItemSource" list="shipmentItemSourceList">
+                            <econdition field-name="orderId" from="purchaseOrderId"/>
+                        </entity-find>
+                        <iterate list="shipmentItemSourceList" entry="shipmentItemSource">
+                            <entity-find entity-name="mantle.shipment.ShipmentItemSource" list="existingShipmentItemSourceList">
+                                <econdition field-name="orderId" from="salesOrder.orderId"/>
+                                <econdition field-name="orderItemSeqId" from="shipmentItemSource.orderItemSeqId"/>
+                                <econdition field-name="shipmentId" from="shipmentItemSource.shipmentId"/>
+                            </entity-find>
+                            <if condition="existingShipmentItemSourceList.size() == 0">
+                                <entity-find entity-name="mantle.order.OrderItem" list="orderItemList">
+                                    <econdition field-name="orderId" from="salesOrder.orderId"/>
+                                    <econditions combine="or">
+                                        <econdition field-name="productId" from="shipmentItemSource.productId"/>
+                                        <econdition field-name="orderItemSeqId" from="shipmentItemSource.orderItemSeqId"/>
+                                    </econditions>
+                                    <order-by field-name="-quantity"/>
+                                </entity-find>
+                                <if condition="orderItemList.size() == 0">
+                                    <log level="warn" message="OrderItem does not exist for Order ${salesOrder.orderId} for ShipmentItemSource ${shipmentItemSource.shipmentItemSourceId}"/>
+                                    <continue/>
+                                </if>
+                                <set field="orderItem" from="orderItemList.getFirst()"/>
+                                <if condition="orderItemList.size() &gt; 1">
+                                    <if condition="shipmentItemSource.orderItemSeqId &amp;&amp; orderItem.orderItemSeqId != shipmentItemSource.orderItemSeqId">
+                                        <set field="possibleOrderItem" from="orderItemList.find { it.orderItemSeqId == shipmentItemSource.orderItemSeqId }"/>
+                                        <set field="orderItem" from="possibleOrderItem?:orderItem"/>
+                                    </if>
+                                </if>
+
+                                <if condition="orderItem"><then>
+                                    <service-call name="create#mantle.shipment.ShipmentItemSource" in-map="shipmentItemSource.findAll { k, v -> k != 'shipmentItemSourceId' } + [orderId:salesOrder.orderId]"/>
+                                </then><else>
+                                    <log level="warn" message="No OrderItem found for Order ${salesOrder.orderId} for ShipmentItemSource ${shipmentItemSource.shipmentItemSourceId}"/>
+                                </else></if>
+                            </if>
+                        </iterate>
+                    </then><else>
+                        <log level="warn" message="Not updating unknown orderId ${purchaseOrder.parentOrderId}"/>
+                    </else></if>
+                </then><else>
+                    <log level="warn" message="Not updating Sales Order Shipment No parentOrderId found for orderId ${purchaseOrderId}"/>
+                </else></if>
             </if>
         </actions>
     </service>
