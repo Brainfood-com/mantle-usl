@@ -2737,7 +2737,8 @@ General Order Placement and eCommerce Usage
     <!-- ================================================== -->
     
     <service verb="create" noun="DropShipPurchaseOrder">
-        <description></description>
+        <description>Takes only order items in a sales order that are connected to a dropship facility (through an asset record),
+and creates a purchase order for the facility to send to the dropshipper (instead of fulfilling internally).</description>
         <in-parameters>
             <parameter name="salesOrderId" required="true"/>
             <parameter name="vendorPartyId" required="true"><description>Party of the Dropshipper</description></parameter>
