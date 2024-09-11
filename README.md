@@ -18,3 +18,14 @@ For details about Mantle see its page on moqui.org:
 There is an overview of Mantle Business Artifacts in the **Making Apps with Moqui** book. Download the PDF here:
 
 <http://www.moqui.org/MakingAppsWithMoqui-1.0.pdf>
+
+---
+
+### Dropshipping Setup
+Difference from the standard setup:
+- Set the `Facility`'s drop-ship `facilityTypeEnumId` to `FcTpDropShip`
+- Set the `Facility`'s `assetAllowOtherOwner` to `'Y'`
+- Set the `Facility`'s `ownerPartyId` to the `Party` that will be the order vendor party
+- For each `OrderItem` to drop-ship, set the `OrderPart` `Facility` or if not the `Facility`, the `ProductStoreFacility` the facility to drop-ship `Facility` selected before (if using the normal asset reservation service `AssetServices.reserve#AssetForOrderItem`)
+- Reserve the assets for your `OrderItem`s as usual to the `Facility` selected before by Placing / Approving / manually reserving the inventory
+- 

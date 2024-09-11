@@ -2746,15 +2746,6 @@ and creates a purchase order for the facility to send to the dropshipper (instea
 
             <parameter name="productStoreId" default="null"/>
 
-<!--            &lt;!&ndash; mantle.shipment.ShipmentServices.create#OrderPartShipment parameters &ndash;&gt;-->
-<!--            <parameter name="createPackage" type="Boolean" default="true"><description>Service defaults to false, but we need it to create a package</description></parameter>-->
-<!--            <parameter name="createRouteSegment" type="Boolean" default="true"/>-->
-<!--            <parameter name="originFacilityId"/>-->
-<!--            <parameter name="destinationFacilityId"/>-->
-<!--            <parameter name="tryAutoPackage" type="Boolean" default="true"/>-->
-<!--            <parameter name="shippingGatewayConfigId"/>-->
-<!--            <parameter name="entryDate" type="Timestamp" default="ec.user.nowTimestamp"/>-->
-
             <!-- mantle.order.OrderServices.clone#Order parameters -->
             <auto-parameters entity-name="mantle.order.OrderHeader" include="nonpk">
                 <exclude field-name="parentOrderId"/><exclude field-name="lastOrderedDate"/>
@@ -2873,7 +2864,10 @@ and creates a purchase order for the facility to send to the dropshipper (instea
             <if condition="facilityList.size() == 0">
                 <return error="true" message="No facilities ${assetList*.facilityId} found for asset reservations on order ${salesOrderId} for order items ${orderItemList*.orderItemSeqId} with assets ${assetList*.assetId}"/>
             </if>
-            <!-- TODO: Could check to see if facility owner party is an OrgInternal if it is send a warning and don't add that OrderPart -->
+            <entity-find entity-name="mantle.party.PartyRole" list="facilityOwnerInternalOrgList">
+                <econdition field-name="partyId" operator="in" from="facilityList*.ownerPartyId"/>
+                <econdition field-name="roleTypeId" value="OrgInternal"/>
+            </entity-find>
 
             <iterate list="orderPartList" entry="value">
                 <set field="value.orderId" from="orderId"/>
@@ -2898,6 +2892,9 @@ and creates a purchase order for the facility to send to the dropshipper (instea
                         <log level="warn" message="No vendorPartyId found for OrderPart ${value.orderId}:${value.orderPartSeqId} based on order item -> asset reservation -> asset -> facility.ownerPartyId || ${orderPartItemList*.orderItemSeqId} ${orderPartReservationList*.assetReservationId} -> ${orderPartAssetList.assetId} -> ${orderPartFacilityList*.ownerPartyId}"/>
                         <continue/>
                     </if>
+                    <if condition="facilityOwnerInternalOrgList*.partyId.contains(value.vendorPartyId)">
+                        <log level="info" message="Cannot add create a drop-ship order part for an internal organization: Vendor ${value.vendorPartyId} is an internal organization, skipping order part ${value.orderId}:${value.orderPartSeqId}"/>
+                        <continue/></if>
                 </if>
                 <if condition="clearDates">
                     <!-- set the fields even if null, don't do this for other fields -->
@@ -2938,9 +2935,13 @@ and creates a purchase order for the facility to send to the dropshipper (instea
                 <if condition="asset == null">
                     <log level="info" message="No asset found for asset reservation ${reservation.assetReservationId} with id ${reservation.assetId} on order item ${value.orderId}:${value.orderPartSeqId}:${value.orderItemSeqId}"/>
                     <continue/></if>
+                <!-- TODO: Should assets with an OrgInternal ownerPartyId be skipped? -->
                 <set field="facility" from="facilityList.find { it.facilityId == asset.facilityId }"/>
                 <if condition="facility == null">
                     <log level="info" message="No facility found for asset ${asset.assetId} with facilityId ${asset.facilityId} on order item ${value.orderId}:${value.orderPartSeqId}:${value.orderItemSeqId}"/>
+                    <continue/></if>
+                <if condition="facilityOwnerInternalOrgList*.partyId.contains(facility.ownerPartyId)">
+                    <log level="info" message="Cannot add create a drop-ship order item for an internal organization: Facility ${facility.facilityId} with owner party ${facility.ownerPartyId} is an internal organization, skipping order item ${value.orderId}:${value.orderPartSeqId}:${value.orderItemSeqId}"/>
                     <continue/></if>
 
                 <set field="value.orderId" from="orderId"/>
@@ -2953,7 +2954,7 @@ and creates a purchase order for the facility to send to the dropshipper (instea
                 <service-call name="mantle.order.OrderServices.recalc#OrderItemAmount" in-map="value"/>
             </iterate>
             <if condition="!orderItemIdList">
-                <return error="true" message="No OrderItems created for Dropship Purchase Order"/>
+                <return error="true" message="No OrderItems created for Dropship Purchase Order ${orderId} from Sales Order ${salesOrderId}"/>
             </if>
 
             <if condition="copyContactMech">
