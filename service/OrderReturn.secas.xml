@@ -65,21 +65,6 @@ along with this software (see the LICENSE.md file). If not, see
         </actions>
     </seca>
 
-    <!-- Drop-Ship Services -->
-    <!-- Will only run on change of OrderHeader in the requisite reservationAutoEnumId if not AsResAutoNone -->
-    <seca id="DropShipOrderCreatePurchaseOrder" service="mantle.product.AssetServices.reserve#AssetsForOrder" when="tx-commit">
-        <condition><expression>statusChanged &amp;&amp; statusId == 'OrderApproved'</expression></condition>
-        <actions>
-            <service-call name="mantle.order.OrderServices.create#DropShipPurchaseOrder" in-map="[salesOrderId:orderId]"/>
-        </actions>
-    </seca>
-    <!-- Drop-Ship send purchase order parts to drop-shipper -->
-    <seca id="SendPurchaseOrderToDropShipperGeneric" service="mantle.order.OrderServices.create#DropShipPurchaseOrder" when="tx-commit">
-        <actions>
-            <service-call name="mantle.order.OrderServices.send#DropShipPurchaseOrder" in-map="context"/>
-        </actions>
-    </seca>
-
     <!-- Return processing on approval -->
     <seca id="ReturnApprovedProcess" service="update#mantle.order.return.ReturnHeader" when="post-service">
         <condition><expression>statusChanged &amp;&amp; statusId == 'ReturnApproved'</expression></condition>

@@ -2737,39 +2737,12 @@ General Order Placement and eCommerce Usage
     <!-- ================================================== -->
 
     <service verb="send" noun="DropShipPurchaseOrderPart" type="interface">
+        <!-- See README.md of mantle-usl for an example implementation service -->
         <in-parameters>
             <parameter name="orderId" required="true"/>
             <parameter name="orderPartSeqId" required="true"/>
             <parameter name="facilityId" required="true"/>
-            <parameter name="dropShipRemoteId" required="true"/>
         </in-parameters>
-    </service>
-
-    <service verb="send" noun="DropShipPurchaseOrder" authenticate="anonymous-all">
-        <description>For each Part in the Order, find the correct SystemMessageRemote and call the sendServiceName with the necessary parameters</description>
-        <in-parameters>
-            <parameter name="orderId" required="true"/>
-            <parameter name="orderPartIdList" type="List" required="true"/>
-            <parameter name="orderItemIdList" type="List" required="true"/>
-        </in-parameters>
-        <actions>
-            <log level="warn" message="DropShipPurchaseOrder.context.toString() = ${context.toString()}"/>
-            <iterate list="orderPartIdList" entry="orderPart">
-                <if condition="!orderPart.dropShipRemoteId">
-                    <return error="true" message="Facility has no dropShipRemoteId. Create a SystemMessageRemote here ${ec.web?.getWebappRootUrl(false,true)?:''}/qapps/system/SystemMessage/Remote/MessageRemoteList, then go here to add it ${ec.web?.getWebappRootUrl(false,true)?:''}/qapps/tools/AutoScreen/AutoEdit/AutoEditMaster?facilityId=${orderPart.facilityId}&amp;aen=mantle.facility.Facility"/>
-                </if>
-                <entity-find-one entity-name="moqui.service.message.SystemMessageRemote" value-field="remote"
-                        auto-field-map="[systemMessageRemoteId:orderPart.dropShipRemoteId]"/>
-                <if condition="!remote">
-                    <return error="true" message="SystemMessageRemote ${orderPart.dropShipRemoteId} not found"/>
-                </if>
-                <if condition="!remote.sendServiceName">
-                    <return error="true" message="SystemMessageRemote ${orderPart.dropShipRemoteId} has no sendServiceName"/>
-                </if>
-                <service-call name="${remote.sendServiceName}" in-map="[orderId:orderId,orderPartSeqId:orderPartId.orderPartSeqId,
-                     facilityId:orderPart.facilityId,dropShipRemoteId:orderPart.dropShipRemoteId]"/>
-            </iterate>
-        </actions>
     </service>
 
     <service verb="create" noun="DropShipPurchaseOrder" authenticate="anonymous-all">
@@ -2868,6 +2841,8 @@ and creates a purchase order for the facility to send to the dropshipper (instea
             <entity-find entity-name="mantle.order.OrderPart" list="orderPartList">
                 <econdition field-name="orderId" from="baseOrderId"/>
                 <econdition field-name="vendorPartyId" operator="in" from="vendorInternalOrgList*.partyId"/></entity-find>
+            <!-- It is expected behavior for not every Order to be a Sales Order -->
+            <if condition="orderPartList.size() == 0"><return/></if>
             <entity-find entity-name="mantle.order.OrderItem" list="orderItemList">
                 <econdition field-name="orderId" from="baseOrderId"/>
                 <econdition field-name="orderPartSeqId" operator="in" from="orderPartList*.orderPartSeqId"/><order-by field-name="orderItemSeqId"/></entity-find>
@@ -3063,6 +3038,22 @@ and creates a purchase order for the facility to send to the dropshipper (instea
             </then><else>
                 <service-call name="mantle.order.OrderServices.approve#Order" in-map="[orderId:orderId]" out-map="context"/>
             </else></if>
+
+            <iterate list="orderPartIdList" entry="orderPart">
+                <if condition="!orderPart.dropShipRemoteId">
+                    <return error="true" message="Facility has no dropShipRemoteId. Create a SystemMessageRemote here ${ec.web?.getWebappRootUrl(false,true)?:''}/qapps/system/SystemMessage/Remote/MessageRemoteList, then go here to add it ${ec.web?.getWebappRootUrl(false,true)?:''}/qapps/tools/AutoScreen/AutoEdit/AutoEditMaster?facilityId=${orderPart.facilityId}&amp;aen=mantle.facility.Facility"/>
+                </if>
+                <entity-find-one entity-name="moqui.service.message.SystemMessageRemote" value-field="remote"
+                        auto-field-map="[systemMessageRemoteId:orderPart.dropShipRemoteId]"/>
+                <if condition="!remote">
+                    <return error="true" message="SystemMessageRemote ${orderPart.dropShipRemoteId} not found"/>
+                </if>
+                <if condition="!remote.sendServiceName">
+                    <return error="true" message="SystemMessageRemote ${orderPart.dropShipRemoteId} has no sendServiceName"/>
+                </if>
+                <service-call name="${remote.sendServiceName}" in-map="[orderId:orderId,orderPartSeqId:orderPart.orderPartSeqId,
+                     facilityId:orderPart.facilityId]"/>
+            </iterate>
         </actions>
     </service>
 
