@@ -1177,6 +1177,9 @@ along with this software (see the LICENSE.md file). If not, see
             <parameter name="forceIssueOther" type="Boolean" default="false"/>
             <parameter name="forceAddToPackage" type="Boolean" default="true"><description>Add to new package if no shipmentPackageSeqId specified</description></parameter>
         </in-parameters>
+        <out-parameters>
+            <parameter name="shipmentPackageSeqId"/>
+        </out-parameters>
         <actions>
             <entity-find-one entity-name="mantle.shipment.ShipmentItemSource" value-field="shipmentItemSource"/>
             <if condition="shipmentItemSource == null"><return error="true" message="Could not find ShipmentItemSource with ID ${shipmentItemSourceId}"/></if>
@@ -1313,7 +1316,7 @@ along with this software (see the LICENSE.md file). If not, see
             <if condition="forceAddToPackage || shipmentPackageSeqId">
                 <service-call name="mantle.shipment.ShipmentServices.add#ItemToPackage"
                         in-map="[shipmentId:shipmentItemSource.shipmentId, productId:shipmentItemSource.productId,
-                            shipmentPackageSeqId:shipmentPackageSeqId, quantity:quantity]"/>
+                            shipmentPackageSeqId:shipmentPackageSeqId, quantity:quantity]" out-map="context"/>
             </if>
 
             <!-- update quantityNotHandled to get ready for the next pack call -->

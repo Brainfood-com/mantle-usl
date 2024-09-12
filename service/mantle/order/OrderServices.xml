@@ -2731,4 +2731,572 @@ General Order Placement and eCommerce Usage
             <service-call name="update#mantle.request.Request" in-map="[requestId:requestId, statusId:'ReqInProgress']"/>
         </actions>
     </service>
+
+    <!-- ================================================== -->
+    <!-- ========== Drop Shipping Order Services ========== -->
+    <!-- ================================================== -->
+
+    <service verb="send" noun="DropShipPurchaseOrderPart" type="interface">
+        <in-parameters>
+            <parameter name="orderId" required="true"/>
+            <parameter name="orderPartSeqId" required="true"/>
+            <parameter name="facilityId" required="true"/>
+            <parameter name="dropShipRemoteId" required="true"/>
+        </in-parameters>
+    </service>
+
+    <service verb="send" noun="DropShipPurchaseOrder" authenticate="anonymous-all">
+        <description>For each Part in the Order, find the correct SystemMessageRemote and call the sendServiceName with the necessary parameters</description>
+        <in-parameters>
+            <parameter name="orderId" required="true"/>
+            <parameter name="orderPartIdList" type="List" required="true"/>
+            <parameter name="orderItemIdList" type="List" required="true"/>
+        </in-parameters>
+        <actions>
+            <log level="warn" message="DropShipPurchaseOrder.context.toString() = ${context.toString()}"/>
+            <iterate list="orderPartIdList" entry="orderPart">
+                <if condition="!orderPart.dropShipRemoteId">
+                    <return error="true" message="Facility has no dropShipRemoteId. Create a SystemMessageRemote here ${ec.web?.getWebappRootUrl(false,true)?:''}/qapps/system/SystemMessage/Remote/MessageRemoteList, then go here to add it ${ec.web?.getWebappRootUrl(false,true)?:''}/qapps/tools/AutoScreen/AutoEdit/AutoEditMaster?facilityId=${orderPart.facilityId}&amp;aen=mantle.facility.Facility"/>
+                </if>
+                <entity-find-one entity-name="moqui.service.message.SystemMessageRemote" value-field="remote"
+                        auto-field-map="[systemMessageRemoteId:orderPart.dropShipRemoteId]"/>
+                <if condition="!remote">
+                    <return error="true" message="SystemMessageRemote ${orderPart.dropShipRemoteId} not found"/>
+                </if>
+                <if condition="!remote.sendServiceName">
+                    <return error="true" message="SystemMessageRemote ${orderPart.dropShipRemoteId} has no sendServiceName"/>
+                </if>
+                <service-call name="${remote.sendServiceName}" in-map="[orderId:orderId,orderPartSeqId:orderPartId.orderPartSeqId,
+                     facilityId:orderPart.facilityId,dropShipRemoteId:orderPart.dropShipRemoteId]"/>
+            </iterate>
+        </actions>
+    </service>
+
+    <service verb="create" noun="DropShipPurchaseOrder" authenticate="anonymous-all">
+        <description>Takes only order items in a sales order that are connected to a dropship facility (through an asset record),
+and creates a purchase order for the facility to send to the dropshipper (instead of fulfilling internally).</description>
+        <in-parameters>
+            <parameter name="salesOrderId" required="true"/>
+            <parameter name="vendorPartyId"><description>Party of the Dropshipper</description></parameter>
+            <parameter name="customerPartyId"><description>Party of the Internal Organization. Defaults to the Sales Order Part vendorPartyId that has an OrgInternal PartyRole</description></parameter>
+
+            <parameter name="productStoreId" default="null"/>
+
+            <!-- mantle.order.OrderServices.clone#Order parameters -->
+            <auto-parameters entity-name="mantle.order.OrderHeader" include="nonpk">
+                <exclude field-name="parentOrderId"/><exclude field-name="lastOrderedDate"/>
+                <exclude field-name="productStoreId"/></auto-parameters>
+            <auto-parameters entity-name="mantle.order.OrderPart" include="nonpk">
+                <exclude field-name="vendorPartyId"/><exclude field-name="customerPartyId"/></auto-parameters>
+            <parameter name="requiredByDate" type="Timestamp"/>
+            <parameter name="statusId" default-value="OrderOpen"/>
+            <parameter name="entryDate" type="Timestamp" default="ec.user.nowTimestamp"/>
+            <parameter name="visitId" default="ec.user.visitId"/>
+            <parameter name="orderRevision" type="Integer" default="1"/>
+
+            <parameter name="clearDates" type="Boolean" default="true"/>
+            <parameter name="productItemsOnly" type="Boolean" default="true"/>
+            <parameter name="copyContactMech" type="Boolean" default="true"/>
+            <parameter name="copyContent" type="Boolean" default="true"/>
+            <parameter name="copyNote" type="Boolean" default="true"/>
+            <parameter name="copyPartParty" type="Boolean" default="false"/>
+            <parameter name="copyTerm" type="Boolean" default="false"/>
+            <parameter name="copyItemWorkEffort" type="Boolean" default="true"/>
+            <parameter name="copyPayment" type="Boolean" default="false"/>
+            <parameter name="paymentStatusId" default-value="PmntPromised"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="orderId"><description>Dropship Purchase Order Id</description></parameter>
+            <parameter name="orderPartIdList" type="List"/>
+            <parameter name="orderItemIdList" type="List">
+                <parameter name="orderPartSeqId"/>
+                <parameter name="orderItemSeqId"/>
+            </parameter>
+        </out-parameters>
+        <actions>
+            <set field="orderPartIdList" from="[]"/>
+            <set field="orderItemIdList" from="[]"/>
+            <set field="orderPartShipmentList" from="[]"/>
+            <entity-find entity-name="mantle.party.PartyRole" list="vendorInternalOrgList" cache="true">
+                <econdition field-name="roleTypeId" value="OrgInternal"/>
+            </entity-find>
+            <set field="baseOrderId" from="salesOrderId"/>
+
+            <!-- Check if vendorPartyId actually exists -->
+            <if condition="vendorPartyId">
+                <entity-find-one entity-name="mantle.party.Party" value-field="vendorParty">
+                    <field-map field-name="partyId" from="vendorPartyId"/></entity-find-one>
+                <if condition="!vendorParty">
+                    <log level="warn" message="vendorPartyId ${vendorPartyId} does not exist. Setting to null default"/>
+                    <set field="vendorPartyId" from="null"/>
+                </if>
+            </if>
+
+            <!-- Adapted from clone#Order -->
+            <entity-find-one entity-name="mantle.order.OrderHeader" value-field="orderHeader">
+                <field-map field-name="orderId" from="baseOrderId"/></entity-find-one>
+            <if condition="!orderHeader">
+                <return error="true" message="Order ${baseOrderId} not found"/>
+            </if>
+
+            <!-- clear and sequence new orderId -->
+            <set field="orderHeader.orderId" from="null"/>
+            <entity-sequenced-id-primary value-field="orderHeader"/>
+
+            <!-- set nonpk fields from context, if passed -->
+            <entity-set value-field="orderHeader" include="nonpk"/>
+
+            <!-- set or clear fields related to order cloning and recurrence -->
+            <set field="orderHeader.parentOrderId" from="baseOrderId"/>
+            <set field="orderHeader.recurCronExpression" from="null"/>
+            <set field="orderHeader.lastOrderedDate" from="null"/>
+            <set field="orderHeader.recurAutoInvoice" from="null"/>
+
+            <if condition="clearDates">
+                <!-- set the fields even if null, don't do this for other fields -->
+                <set field="orderHeader.entryDate" from="entryDate"/>
+                <set field="orderHeader.placedDate" from="placedDate"/>
+                <set field="orderHeader.approvedDate" from="approvedDate"/>
+                <set field="orderHeader.completedDate" from="completedDate"/>
+                <!-- don't set this on clones, used for recurring orders to track last date/time of clone/recurrence: <set field="orderHeader.lastOrderedDate" from="lastOrderedDate"/> -->
+            </if>
+
+            <!-- create new OrderHeader -->
+            <entity-create value-field="orderHeader"/>
+            <set field="orderId" from="orderHeader.orderId"/>
+
+            <entity-find entity-name="mantle.order.OrderPart" list="orderPartList">
+                <econdition field-name="orderId" from="baseOrderId"/>
+                <econdition field-name="vendorPartyId" operator="in" from="vendorInternalOrgList*.partyId"/></entity-find>
+            <entity-find entity-name="mantle.order.OrderItem" list="orderItemList">
+                <econdition field-name="orderId" from="baseOrderId"/>
+                <econdition field-name="orderPartSeqId" operator="in" from="orderPartList*.orderPartSeqId"/><order-by field-name="orderItemSeqId"/></entity-find>
+            <entity-find entity-name="mantle.product.issuance.AssetReservation" list="reservationList">
+                <econdition field-name="orderId" from="baseOrderId"/>
+                <econdition field-name="orderItemSeqId" operator="in" from="orderItemList*.orderItemSeqId"/>
+            </entity-find>
+            <if condition="reservationList.size() == 0">
+                <!-- Ensure that the reservations could have completed for this order see: AssetServices.reserve#AssetsForOrder service ran in ProductAsset.secas.xml -->
+                <entity-find entity-name="moqui.entity.EntityAuditLog" list="orderHeaderStatusCount">
+                    <econdition field-name="changedEntityName" value="mantle.order.OrderHeader"/>
+                    <!-- with statusId on OrderPart include these as well for orders: <econdition field-name="changedFieldName" operator="not-equals" value="statusId"/> -->
+                    <econdition field-name="pkPrimaryValue" from="salesOrderId"/>
+                    <econdition field-name="changedFieldName" value="statusId"/>
+                    <econdition field-name="newValueText" value="OrderPlaced"/>
+                    <select-field field-name="changedEntityName"/>
+                </entity-find>
+                <if condition="orderHeaderStatusCount.size() == 0">
+                    <return error="true" message="Order ${salesOrderId} has not ever been placed, cannot create Dropship Purchase Order because no asset reservations are made"/>
+                </if>
+                <return error="true" message="Cannot create dropship order if no asset reservations exist to decide which facility and vendor to create the purchase order for order ${salesOrderId} for order items ${orderItemList*.orderItemSeqId}"/>
+            </if>
+            <entity-find entity-name="mantle.product.asset.Asset" list="assetList">
+                <econdition field-name="assetId" from="reservationList*.assetId"/></entity-find>
+            <entity-find entity-name="mantle.facility.Facility" list="facilityList">
+                <econdition field-name="facilityId" from="assetList*.facilityId"/>
+                <econdition field-name="facilityTypeEnumId" value="FcTpDropShip"/></entity-find>
+            <if condition="facilityList.size() == 0">
+                <return error="true" message="No facilities ${assetList*.facilityId} found for asset reservations on order ${salesOrderId} for order items ${orderItemList*.orderItemSeqId} with assets ${assetList*.assetId}"/>
+            </if>
+            <entity-find entity-name="mantle.party.PartyRole" list="facilityOwnerInternalOrgList">
+                <econdition field-name="partyId" operator="in" from="facilityList*.ownerPartyId"/>
+                <econdition field-name="roleTypeId" value="OrgInternal"/>
+            </entity-find>
+
+            <iterate list="orderPartList" entry="value">
+                <set field="value.orderId" from="orderId"/>
+                <set field="valueCustomerPartyId" from="value.customerPartyId"/>
+                <if condition="!customerPartyId">
+                    <set field="valueVendorPartyId" from="value.vendorPartyId"/>
+                </if>
+                <entity-set value-field="value" include="nonpk"/>
+                <if condition="!customerPartyId">
+                    <set field="value.customerPartyId" from="valueVendorPartyId"/>
+                </if>
+                <if condition="!vendorPartyId">
+                    <!-- Set the vendorPartyId to the OrderPart's OrderItem's facility ownerPartyId mode -->
+                    <filter-map-list list="orderItemList" to-list="orderPartItemList">
+                        <field-map field-name="orderPartSeqId" from="value.orderPartSeqId"/>
+                    </filter-map-list>
+                    <set field="orderPartReservationList" from="reservationList.findAll { it.orderItemSeqId in orderPartItemList*.orderItemSeqId }"/>
+                    <set field="orderPartAssetList" from="assetList.findAll { it.assetId in orderPartReservationList*.assetId }"/>
+                    <set field="orderPartFacilityList" from="facilityList.findAll { it.facilityId in orderPartAssetList*.facilityId }"/>
+                    <set field="value.vendorPartyId" from="orderPartFacilityList.groupBy { it.ownerPartyId }.max { it.value.size() }?.key"/>
+                    <if condition="!value.vendorPartyId">
+                        <log level="warn" message="No vendorPartyId found for OrderPart ${value.orderId}:${value.orderPartSeqId} based on order item -> asset reservation -> asset -> facility.ownerPartyId || ${orderPartItemList*.orderItemSeqId} ${orderPartReservationList*.assetReservationId} -> ${orderPartAssetList.assetId} -> ${orderPartFacilityList*.ownerPartyId}"/>
+                        <continue/>
+                    </if>
+                    <if condition="facilityOwnerInternalOrgList*.partyId.contains(value.vendorPartyId)">
+                        <log level="info" message="Cannot add create a drop-ship order part for an internal organization: Vendor ${value.vendorPartyId} is an internal organization, skipping order part ${value.orderId}:${value.orderPartSeqId}"/>
+                        <continue/></if>
+                </if>
+                <if condition="clearDates">
+                    <!-- set the fields even if null, don't do this for other fields -->
+                    <set field="value.shipAfterDate" from="shipAfterDate"/>
+                    <set field="value.shipBeforeDate" from="shipBeforeDate"/>
+                    <set field="value.estimatedShipDate" from="estimatedShipDate"/>
+                    <set field="value.estimatedDeliveryDate" from="estimatedDeliveryDate"/>
+                    <set field="value.validFromDate" from="validFromDate"/>
+                    <set field="value.validThruDate" from="validThruDate"/>
+                    <set field="value.autoCancelDate" from="autoCancelDate"/>
+                    <set field="value.dontCancelSetDate" from="dontCancelSetDate"/>
+                </if>
+                <entity-create value-field="value"/>
+                <set field="facility" from="facilityList.find { it.facilityId == value.facilityId }"/>
+                <set field="orderPartIdList" from="orderPartIdList + [orderPartSeqId:value.orderPartSeqId,facilityId:value.facilityId,vendorPartyId:value.vendorPartyId,dropShipRemoteId:facility.dropShipRemoteId]"/>
+                <service-call name="create#mantle.order.OrderPartParty" in-map="[orderId:orderId, orderPartSeqId:value.orderPartSeqId, partyId:valueCustomerPartyId, roleTypeId:'CustomerShipTo']"/>
+            </iterate>
+            <if condition="orderPartIdList.size() == 0">
+                <return error="true" message="No OrderParts created for Dropship Purchase Order"/>
+            </if>
+
+            <entity-find entity-name="moqui.basic.EnumGroupMember" list="productItemTypeEgms" cache="true">
+                <econdition field-name="enumGroupEnumId" value="EngItemsProduct"/></entity-find>
+            <set field="productItemTypes" from="productItemTypeEgms*.enumId"/>
+
+            <iterate list="orderItemList" entry="value">
+                <if condition="!orderPartIdList*.orderPartSeqId.contains(value.orderPartSeqId)">
+                    <log level="warn" message="Skipping copying OrderItem ${value.orderId}:${value.orderItemSeqId} because OrderPart has no valid dropship items"/>
+                    <continue/></if>
+                <if condition="productItemsOnly &amp;&amp; (!value.productId || !productItemTypes.contains(value.itemTypeEnumId))"><continue/></if>
+                <!-- See if asset is reserved on the sales order, if it is and the asset is at a dropship type facility,  add it to the purchase order without asset reservation -->
+                <set field="orderItemReservationList" from="reservationList.findAll { it.orderItemSeqId == value.orderItemSeqId }"/>
+                <if condition="orderItemReservationList.size() == 0"><continue/></if>
+                <set field="reservation" from="orderItemReservationList.getFirst()"/>
+                <if condition="orderItemReservationList.size() &gt; 1">
+                    <log level="warn" message="Multiple asset reservations found for order item ${value.orderId}:${value.orderItemSeqId}, chose reservation ${reservation.assetReservationId} out of ${orderItemReservationList*.assetReservationId}"/>
+                </if>
+                <set field="asset" from="assetList.find { it.assetId == reservation.assetId }"/>
+                <if condition="asset == null">
+                    <log level="info" message="No asset found for asset reservation ${reservation.assetReservationId} with id ${reservation.assetId} on order item ${value.orderId}:${value.orderPartSeqId}:${value.orderItemSeqId}"/>
+                    <continue/></if>
+                <!-- TODO: Should assets with an OrgInternal ownerPartyId be skipped? -->
+                <set field="facility" from="facilityList.find { it.facilityId == asset.facilityId }"/>
+                <if condition="facility == null">
+                    <log level="info" message="No facility found for asset ${asset.assetId} with facilityId ${asset.facilityId} on order item ${value.orderId}:${value.orderPartSeqId}:${value.orderItemSeqId}"/>
+                    <continue/></if>
+                <if condition="facilityOwnerInternalOrgList*.partyId.contains(facility.ownerPartyId)">
+                    <log level="info" message="Cannot add create a drop-ship order item for an internal organization: Facility ${facility.facilityId} with owner party ${facility.ownerPartyId} is an internal organization, skipping order item ${value.orderId}:${value.orderPartSeqId}:${value.orderItemSeqId}"/>
+                    <continue/></if>
+
+                <set field="value.orderId" from="orderId"/>
+                <set field="value.orderItemSeqId" from="null"/>
+                <entity-sequenced-id-secondary value-field="value"/>
+                <if condition="clearDates"><set field="value.requiredByDate" from="requiredByDate"/></if>
+                <entity-create value-field="value"/>
+                <set field="orderItemIdList" from="orderItemIdList + [orderPartSeqId:value.orderPartSeqId,
+                    orderItemSeqId:value.orderItemSeqId, productId:value.productId, facilityId:facility.facilityId]"/>
+                <service-call name="mantle.order.OrderServices.recalc#OrderItemAmount" in-map="value"/>
+            </iterate>
+            <if condition="!orderItemIdList">
+                <return error="true" message="No OrderItems created for Dropship Purchase Order ${orderId} from Sales Order ${salesOrderId}"/>
+            </if>
+
+            <if condition="copyContactMech">
+                <entity-find entity-name="mantle.order.OrderPartContactMech" list="valueList">
+                    <econdition field-name="orderId" from="baseOrderId"/>
+                    <econdition field-name="orderPartSeqId" operator="in" from="orderPartList*.orderPartSeqId"/></entity-find>
+                <iterate list="valueList" entry="value"><set field="value.orderId" from="orderId"/><entity-create value-field="value"/></iterate>
+            </if>
+            <if condition="copyContent">
+                <entity-find entity-name="mantle.order.OrderContent" list="valueList">
+                    <econdition field-name="orderId" from="baseOrderId"/>
+                    <econdition field-name="orderItemSeqId" operator="in" from="orderItemList*.orderItemSeqId" ignore-if-empty="true"/></entity-find>
+                <iterate list="valueList" entry="value">
+                    <set field="value.orderId" from="orderId"/>
+                    <set field="value.orderContentId" from="null"/>
+                    <entity-sequenced-id-primary value-field="value"/>
+                    <entity-create value-field="value"/>
+                </iterate>
+            </if>
+            <if condition="copyNote">
+                <entity-find entity-name="mantle.order.OrderNote" list="valueList">
+                    <econdition field-name="orderId" from="baseOrderId"/></entity-find>
+                <iterate list="valueList" entry="value"><set field="value.orderId" from="orderId"/><entity-create value-field="value"/></iterate>
+            </if>
+            <if condition="copyPartParty">
+                <entity-find entity-name="mantle.order.OrderPartParty" list="valueList">
+                    <econdition field-name="orderId" from="baseOrderId"/>
+                    <econdition field-name="orderPartSeqId" operator="in" from="orderPartList*.orderPartSeqId"/></entity-find>
+                <iterate list="valueList" entry="value"><set field="value.orderId" from="orderId"/><entity-create value-field="value"/></iterate>
+            </if>
+            <if condition="copyTerm">
+                <entity-find entity-name="mantle.order.OrderPartTerm" list="valueList">
+                    <econdition field-name="orderId" from="baseOrderId"/>
+                    <econdition field-name="orderPartSeqId" operator="in" from="orderPartList*.orderPartSeqId"/></entity-find>
+                <iterate list="valueList" entry="value"><set field="value.orderId" from="orderId"/><entity-create value-field="value"/></iterate>
+            </if>
+            <if condition="copyItemWorkEffort">
+                <entity-find entity-name="mantle.order.OrderItemWorkEffort" list="valueList">
+                    <econdition field-name="orderId" from="baseOrderId"/>
+                    <econdition field-name="orderItemSeqId" operator="in" from="orderItemList*.orderItemSeqId"/></entity-find>
+                <iterate list="valueList" entry="value"><set field="value.orderId" from="orderId"/><entity-create value-field="value"/></iterate>
+            </if>
+
+            <if condition="copyPayment">
+                <entity-find entity-name="mantle.account.payment.Payment" list="valueList">
+                    <econdition field-name="orderId" from="baseOrderId"/>
+                    <econdition field-name="orderPartSeqId" operator="in" from="orderPartList*.orderPartSeqId" ignore-if-empty="true"/>
+                    <econdition field-name="orderItemSeqId" operator="in" from="orderItemList*.orderItemSeqId" ignore-if-empty="true"/>
+                </entity-find>
+                <iterate list="valueList" entry="value">
+                    <set field="value.orderId" from="orderId"/>
+                    <set field="value.statusId" from="paymentStatusId"/>
+                    <set field="value.paymentAuthCode" from="null"/><set field="value.paymentRefNum" from="null"/>
+                    <set field="value.presentFlag" from="null"/><set field="value.swipedFlag" from="null"/>
+                    <set field="value.processAttempt" from="null"/><set field="value.needsNsfRetry" from="null"/>
+                    <set field="value.visitId" from="visitId"/>
+                    <if condition="clearDates"><set field="value.effectiveDate" from="null"/></if>
+                    <set field="value.paymentId" from="null"/>
+                    <entity-sequenced-id-primary value-field="value"/>
+                    <entity-create value-field="value"/>
+                </iterate>
+            </if>
+
+            <log level="info" message="Created Order ${orderId} as a clone of Order ${baseOrderId}"/>
+
+            <!-- placed when order is confirmed sent which has already happened -->
+            <service-call name="mantle.order.OrderServices.place#Order" in-map="[orderId:orderId]" out-map="context"/>
+            <!-- purchase order starts in approved because it is already confirmed from the customer / internal side -->
+            <if condition="!ec.user.userAccount?.partyId"><then>
+                <service-call name="mantle.order.OrderServices.update#OrderStatus" out-map="context" in-map="context + [statusId:'OrderApproved']"/>
+            </then><else>
+                <service-call name="mantle.order.OrderServices.approve#Order" in-map="[orderId:orderId]" out-map="context"/>
+            </else></if>
+        </actions>
+    </service>
+
+    <service verb="finalize" noun="DropShipPurchaseOrder">
+        <description>This service is meant to be called when the external drop-ship vendor has finalized or otherwise completed their part of the order processing.
+
+This implements the second half of the drop-ship PO process. It will need to finalize the PO, and then reflect needed bits back into the SO.
+
+Note: This is a first pass on this service, and will be changed in the future.</description>
+        <in-parameters>
+            <parameter name="purchaseOrderId" required="true"/>
+            <parameter name="orderPartSeqId" required="true"/>
+            <parameter name="productQuantityList" type="List" default="[[productId:'100890']]">
+                <parameter name="productId"/>
+                <parameter name="quantity" type="BigDecimal"/>
+            </parameter>
+            <parameter name="trackingCode"/>
+            
+            <parameter name="autoShipShipment" type="Boolean" default="true"/>
+            <parameter name="autoCreateSalesShipment" type="Boolean" default="true"/>
+<!--            <parameter name="autoDeliverShipment" type="Boolean" default="true" required="true"/>-->
+        </in-parameters>
+        <out-parameters>
+            <parameter name="needsToAndHasSetTrackingCode" type="Boolean"/>
+            <parameter name="setTrackingCodeShipmentPackageRouteSegList" type="List"/>
+            <parameter name="updatedShipmentIdList" type="List"/>
+            <parameter name="shipmentId"/>
+            <parameter name="changedShipmentPackageSeqIdList"/>
+        </out-parameters>
+        <actions>
+            <set field="orderId" from="purchaseOrderId"/>
+            <set field="needsToAndHasSetTrackingCode" from="trackingCode ? false : true"/>
+            <set field="setTrackingCodeShipmentPackageRouteSegList" from="[]"/>
+            <set field="updatedShipmentIdList" from="[]"/>
+            <set field="changedShipmentPackageSeqIdList" from="[]"/>
+            <entity-find entity-name="mantle.order.OrderItem" list="allOrderItemList" for-update="true">
+                <econdition field-name="orderId"/>
+                <econdition field-name="orderPartSeqId"/>
+            </entity-find>
+
+            <iterate list="productQuantityList" entry="productQuantity">
+
+                <set field="productId" from="productQuantity.productId"/>
+                <set field="quantity" from="productQuantity.quantity"/>
+                <filter-map-list list="allOrderItemList" to-list="orderItemList">
+                    <field-map field-name="productId"/>
+                </filter-map-list>
+                <if condition="orderItemList.size() == 0">
+                    <log level="warn" message="No OrderItem found for productId ${productQuantity.productId} in Order ${purchaseOrderId}"/>
+                    <continue/>
+                </if>
+                <set field="orderItem" from="orderItemList.get(0)"/>
+                <if condition="productQuantity.quantity &amp;&amp; orderItemList.size() == 1">
+                    <set field="orderItem.quantity" from="productQuantity.quantity"/>
+                    <entity-update value-field="orderItem"/>
+                </if>
+                <if condition="orderItemList.size() &gt; 1">
+                    <return type="danger" message="Cannot update or finalize Dropship Purchase Order. Multiple OrderItems found for productId ${productQuantity.productId} in Order ${purchaseOrderId}"/>
+                </if>
+                <set field="orderItemSeqId" from="orderItem.orderItemSeqId"/>
+                <!-- This also updates ShipmentItem and ShipmentItemSource -->
+                <entity-find entity-name="mantle.shipment.ShipmentItemSource" list="shipmentItemSourceList" limit="2" for-update="true">
+                    <econdition field-name="orderId"/>
+                    <econdition field-name="orderItemSeqId"/>
+                    <econdition field-name="productId"/>
+                    <order-by field-name="-lastUpdatedStamp"/></entity-find>
+                <if condition="shipmentItemSourceList.size() == 0">
+                    <log level="warn" message="No ShipmentItemSource found for OrderItem ${orderItemSeqId} in Order ${purchaseOrderId} for product ${productId}"/>
+                    <continue/>
+                </if>
+                <if condition="shipmentItemSourceList.size() &gt; 1">
+                    <return type="danger" message="Cannot update or finalize Dropship Purchase Order. Multiple ShipmentItemSource found for OrderItem ${orderItemSeqId} in Order ${purchaseOrderId} for product ${productId}"/>
+                </if>
+                <!-- TODO: If a ShipmentItemSource is the connection between the ShipmentItem and the Order here then should we edit the quantity in the ShipmentItemSource? see: https://moqui.org/m/docs/mantle/Mantle+Structure+and+UDM/Shipment#shipment-mantleshipment -->
+                <!-- Basically the relationship between Order -> ShipmentItemSource -> ShipmentItem is not 1:1:1 all the time and this code assumes it is based on the parameters -->
+                <set field="shipmentItemSource" from="shipmentItemSourceList.getFirst()"/>
+                <if condition="shipmentItemSource.shipmentId">
+                    <set field="updatedShipmentIdList" from="updatedShipmentIdList + shipmentItemSource.shipmentId"/>
+                </if>
+
+                <if condition="productQuantity.quantity &amp;&amp; shipmentItemSource.quantity != productQuantity.quantity">
+                    <set field="shipmentItemSource.quantity" from="productQuantity.quantity"/>
+                    <set field="shipmentItemSource.quantityNotHandled" from="productQuantity.quantity"/>
+                    <entity-update value-field="shipmentItemSource"/>
+                </if>
+
+                <entity-find-one entity-name="mantle.shipment.ShipmentItem" value-field="shipmentItem" for-update="true"
+                    auto-field-map="[shipmentId:shipmentItemSource.shipmentId, productId:productId]"/>
+                <if condition="!shipmentItem">
+                    <log level="warn" message="No ShipmentItem found for OrderItem ${orderItemSeqId} in Order ${purchaseOrderId} for product ${productId}"/>
+                    <continue/>
+                </if>
+
+                <if condition="productQuantity.quantity &amp;&amp; shipmentItem.quantity != productQuantity.quantity">
+                    <set field="shipmentItem.quantity" from="productQuantity.quantity"/>
+                    <entity-update value-field="shipmentItem"/>
+                </if>
+
+                <entity-find entity-name="mantle.shipment.ShipmentPackageContent" list="shipmentPackageContentList" for-update="true">
+                    <econdition field-name="shipmentId" from="shipmentItemSource.shipmentId"/>
+                    <econdition field-name="productId"/>
+                    <order-by field-name="-lastUpdatedStamp"/>
+                </entity-find>
+                <if condition="shipmentPackageContentList.size() == 0">
+                    <log level="warn" message="No ShipmentPackageContent found for OrderItem ${orderItemSeqId} in Order ${purchaseOrderId} for product ${productId}"/>
+                </if>
+                <if condition="shipmentPackageContentList.size() &gt; 1">
+                    <return type="danger" message="Cannot update or finalize Dropship Purchase Order. Multiple ShipmentPackageContent found for OrderItem ${orderItemSeqId} in Order ${purchaseOrderId} for product ${productId}"/>
+                </if>
+
+                <if condition="shipmentPackageContentList.size() == 1">
+                    <set field="shipmentPackageContent" from="shipmentPackageContentList.getFirst()"/>
+                    <if condition="productQuantity.quantity &amp;&amp; shipmentPackageContent.quantity != productQuantity.quantity">
+                        <set field="shipmentPackageContent.quantity" from="productQuantity.quantity"/>
+                        <entity-update value-field="shipmentPackageContent"/>
+                    </if>
+
+                    <if condition="trackingCode">
+                        <!-- Only update tracking codes that are null -->
+                        <entity-find entity-name="mantle.shipment.ShipmentPackageRouteSeg" list="shipmentPackageRouteSegList" for-update="true">
+                            <econdition field-name="shipmentId" from="shipmentItemSource.shipmentId"/>
+                            <econdition field-name="shipmentPackageSeqId" from="shipmentPackageContent.shipmentPackageSeqId"/>
+                            <econdition field-name="trackingCode" or-null="true"/>
+                            <order-by field-name="-lastUpdatedStamp"/></entity-find>
+                        <iterate list="shipmentPackageRouteSegList" entry="shipmentPackageRouteSeg">
+                            <if condition="setTrackingCodeShipmentPackageRouteSegList.contains([shipmentId:shipmentItemSource.shipmentId,
+                                shipmentPackageSeqId:shipmentPackageContent.shipmentPackageSeqId, shipmentRouteSegmentSeqId:shipmentPackageRouteSeg.shipmentRouteSegmentSeqId])">
+                                <continue/>
+                            </if>
+                            <if condition="shipmentPackageRouteSeg.trackingCode != trackingCode">
+                                <set field="shipmentPackageRouteSeg.trackingCode" from="trackingCode"/>
+                                <entity-update value-field="shipmentPackageRouteSeg"/>
+                                <set field="setTrackingCodeShipmentPackageRouteSegList" from="setTrackingCodeShipmentPackageRouteSegList
+                                    + [shipmentId:shipmentItemSource.shipmentId, shipmentPackageSeqId:shipmentPackageContent.shipmentPackageSeqId,
+                                    shipmentRouteSegmentSeqId:shipmentPackageRouteSeg.shipmentRouteSegmentSeqId]"/>
+                            </if>
+                            <set field="needsToAndHasSetTrackingCode" from="true"/>
+                        </iterate>
+                    </if>
+                </if>
+
+                <if condition="shipmentItemSource.shipmentId">
+                    <if condition="!updatedShipmentIdList.contains(shipmentItemSource.shipmentId)">
+                        <set field="updatedShipmentIdList" from="updatedShipmentIdList + shipmentItemSource.shipmentId"/>
+                    </if>
+                </if>
+            </iterate>
+
+            <if condition="!needsToAndHasSetTrackingCode">
+                <log level="warn" message="trackingCode is set, but cannot be updated"/>
+            </if>
+
+            <if condition="autoShipShipment">
+                <iterate list="updatedShipmentIdList" entry="shipmentId">
+                    <service-call name="mantle.shipment.ShipmentServices.ship#Shipment" in-map="[shipmentId:shipmentId]"/>
+                </iterate>
+            </if>
+
+            <if condition="autoCreateSalesShipment">
+                <entity-find-one entity-name="mantle.order.OrderHeader" value-field="purchaseOrder" for-update="true"
+                        auto-field-map="[orderId:purchaseOrderId]"/>
+                <if condition="!purchaseOrder">
+                    <return type="danger" message="No Order found for orderId ${purchaseOrderId}"/>
+                </if>
+                <if condition="purchaseOrder.parentOrderId"><then>
+                    <entity-find-one entity-name="mantle.order.OrderHeader" value-field="salesOrder" for-update="true">
+                        <field-map field-name="orderId" from="purchaseOrder.parentOrderId"/></entity-find-one>
+                    <if condition="salesOrder"><then>
+                        <entity-find entity-name="mantle.shipment.ShipmentAndItemSource" list="shipmentItemSourceList">
+                            <econdition field-name="orderId" from="salesOrder.orderId"/>
+                            <econdition field-name="orderItemSeqId" operator="in" from="allOrderItemList*.orderItemSeqId"/>
+                            <econdition field-name="shipmentStatusId" operator="not-in" value="ShipRejected,ShipCancelled"/>
+                            <econdition field-name="statusId" operator="not-equals" value="SisCancelled"/>
+                            <order-by field-name="-lastUpdatedStamp"/>
+                        </entity-find>
+                        <set field="shipment" from="shipmentItemSourceList?.getFirst()"/>
+                        <set field="shipmentId" from="shipment?.shipmentId"/>
+                        <set field="shipmentPackageSeqId" from="null"/>
+
+                        <if condition="!shipmentId">
+                            <service-call name="mantle.shipment.ShipmentServices.create#OrderPartShipment" out-map="context"
+                                    in-map="[orderId:salesOrder.orderId,orderPartSeqId:orderPartSeqId,createPackage:false]"/>
+                            <set field="changedShipmentPackageSeqIdList" from="changedShipmentPackageSeqIdList + shipmentPackageSeqId"/>
+                        </if>
+
+                        <entity-find-one entity-name="mantle.shipment.Shipment" value-field="shipment"
+                                auto-field-map="[shipmentId:shipmentId]"/>
+                        <if condition="!shipment">
+                            <log level="warn" message="No Shipment found for orderId ${salesOrder.orderId}"/>
+                        </if>
+                        <if condition="!['ShipPicked','ShipPacked','ShipShipped'].contains(shipment.statusId)">
+                            <if condition="!shipmentItemSourceList">
+                                <entity-find entity-name="mantle.order.OrderItem" list="allOrderItemList" for-update="true">
+                                    <econdition field-name="orderId" from="salesOrder.orderId"/>
+                                    <econdition field-name="orderPartSeqId"/>
+                                </entity-find>
+                                <entity-find entity-name="mantle.shipment.ShipmentItemSource" list="shipmentItemSourceList">
+                                    <econdition field-name="orderId" from="salesOrder.orderId"/>
+                                </entity-find>
+                            </if>
+                            <if condition="!shipmentItemSourceList">
+                                <return type="danger" error="true" message="Not packing shipment because no ShipmentItemSource found for Sales Order ${salesOrder.orderId}"/>
+                            </if>
+                            <iterate list="shipmentItemSourceList" entry="shipmentItemSource">
+                                <service-call name="mantle.shipment.ShipmentServices.pack#ShipmentItemSource" out-map="context"
+                                    in-map="[shipmentItemSourceId:shipmentItemSource.shipmentItemSourceId,
+                                    quantity:shipmentItemSource.quantity, shipmentPackageSeqId:shipmentPackageSeqId,
+                                    forceAddToPackage:true]"/>
+
+                                <service-call name="mantle.shipment.ShipmentServices.update#ShipmentPackageAndRouteSeg"
+                                        in-map="[shipmentId:shipmentId,shipmentPackageSeqId:shipmentPackageSeqId,
+                                        trackingCode:trackingCode]"/>
+
+                                <set field="changedShipmentPackageSeqIdList" from="changedShipmentPackageSeqIdList + shipmentPackageSeqId"/>
+                            </iterate>
+                        </if>
+                        <entity-find-one entity-name="mantle.shipment.Shipment" value-field="shipment"
+                                auto-field-map="[shipmentId:shipmentId]"/>
+                        <if condition="!['ShipPacked','ShipShipped'].contains(shipment.statusId)">
+                            <service-call name="mantle.shipment.ShipmentServices.pack#Shipment" in-map="[shipmentId:shipmentId]"/>
+                        </if>
+                        <entity-find-one entity-name="mantle.shipment.Shipment" value-field="shipment"
+                                auto-field-map="[shipmentId:shipmentId]"/>
+                        <if condition="!['ShipShipped'].contains(shipment.statusId)">
+                            <service-call name="mantle.shipment.ShipmentServices.ship#Shipment" in-map="[shipmentId:shipmentId]"/>
+                        </if>
+
+                    </then><else>
+                        <log level="warn" message="Not updating unknown orderId ${purchaseOrder.parentOrderId}"/>
+                    </else></if>
+                </then><else>
+                    <log level="warn" message="Not updating Sales Order Shipment No parentOrderId found for orderId ${purchaseOrderId}"/>
+                </else></if>
+            </if>
+        </actions>
+    </service>
 </services>
