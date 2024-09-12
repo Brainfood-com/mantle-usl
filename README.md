@@ -28,4 +28,23 @@ Difference from the standard setup:
 - Set the `Facility`'s `ownerPartyId` to the `Party` that will be the order vendor party
 - For each `OrderItem` to drop-ship, set the `OrderPart` `Facility` or if not the `Facility`, the `ProductStoreFacility` the facility to drop-ship `Facility` selected before (if using the normal asset reservation service `AssetServices.reserve#AssetForOrderItem`)
 - Reserve the assets for your `OrderItem`s as usual to the `Facility` selected before by Placing / Approving / manually reserving the inventory
-- 
+- Create a seca like this that runs your service and sends it to the 3rd party dropshipper
+```xml
+<seca id="DropShipExampleName" service="mantle.order.OrderServices.create#DropShipPurchaseOrder" when="tx-commit">
+    <actions>
+        <!-- sends orderId, orderPartSeqIdList, orderItemIdList -->
+        <service-call name="yourcomponent.YourServices.send#OrderToExampleName" in-map="context"/>
+    </actions>
+</seca>
+```
+- Create a `DropShipGatewayConfig` for the drop-shipper. For each integration a new enumeration with 
+- Create a service that will create the purchase order for the drop-shipper
+```xml
+<service verb="send" noun="OrderToExampleName">
+    <implements service="mantle.order.OrderServices.send#DropShipPurchaseOrderPart"/>
+    <actions>
+        <!-- ... Send your order to the 3rd party dropshipper ... -->
+        
+    </actions>
+</service>
+```
