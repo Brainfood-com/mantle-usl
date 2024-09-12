@@ -2735,8 +2735,44 @@ General Order Placement and eCommerce Usage
     <!-- ================================================== -->
     <!-- ========== Drop Shipping Order Services ========== -->
     <!-- ================================================== -->
-    
-    <service verb="create" noun="DropShipPurchaseOrder">
+
+    <service verb="send" noun="DropShipPurchaseOrderPart" type="interface">
+        <in-parameters>
+            <parameter name="orderId" required="true"/>
+            <parameter name="orderPartSeqId" required="true"/>
+            <parameter name="facilityId" required="true"/>
+            <parameter name="dropShipRemoteId" required="true"/>
+        </in-parameters>
+    </service>
+
+    <service verb="send" noun="DropShipPurchaseOrder" authenticate="anonymous-all">
+        <description>For each Part in the Order, find the correct SystemMessageRemote and call the sendServiceName with the necessary parameters</description>
+        <in-parameters>
+            <parameter name="orderId" required="true"/>
+            <parameter name="orderPartIdList" type="List" required="true"/>
+            <parameter name="orderItemIdList" type="List" required="true"/>
+        </in-parameters>
+        <actions>
+            <log level="warn" message="DropShipPurchaseOrder.context.toString() = ${context.toString()}"/>
+            <iterate list="orderPartIdList" entry="orderPart">
+                <if condition="!orderPart.dropShipRemoteId">
+                    <return error="true" message="Facility has no dropShipRemoteId. Create a SystemMessageRemote here ${ec.web?.getWebappRootUrl(false,true)?:''}/qapps/system/SystemMessage/Remote/MessageRemoteList, then go here to add it ${ec.web?.getWebappRootUrl(false,true)?:''}/qapps/tools/AutoScreen/AutoEdit/AutoEditMaster?facilityId=${orderPart.facilityId}&amp;aen=mantle.facility.Facility"/>
+                </if>
+                <entity-find-one entity-name="moqui.service.message.SystemMessageRemote" value-field="remote"
+                        auto-field-map="[systemMessageRemoteId:orderPart.dropShipRemoteId]"/>
+                <if condition="!remote">
+                    <return error="true" message="SystemMessageRemote ${orderPart.dropShipRemoteId} not found"/>
+                </if>
+                <if condition="!remote.sendServiceName">
+                    <return error="true" message="SystemMessageRemote ${orderPart.dropShipRemoteId} has no sendServiceName"/>
+                </if>
+                <service-call name="${remote.sendServiceName}" in-map="[orderId:orderId,orderPartSeqId:orderPartId.orderPartSeqId,
+                     facilityId:orderPart.facilityId,dropShipRemoteId:orderPart.dropShipRemoteId]"/>
+            </iterate>
+        </actions>
+    </service>
+
+    <service verb="create" noun="DropShipPurchaseOrder" authenticate="anonymous-all">
         <description>Takes only order items in a sales order that are connected to a dropship facility (through an asset record),
 and creates a purchase order for the facility to send to the dropshipper (instead of fulfilling internally).</description>
         <in-parameters>
@@ -2771,19 +2807,14 @@ and creates a purchase order for the facility to send to the dropshipper (instea
         </in-parameters>
         <out-parameters>
             <parameter name="orderId"><description>Dropship Purchase Order Id</description></parameter>
-            <parameter name="orderPartSeqIdList" type="List"/>
+            <parameter name="orderPartIdList" type="List"/>
             <parameter name="orderItemIdList" type="List">
                 <parameter name="orderPartSeqId"/>
                 <parameter name="orderItemSeqId"/>
             </parameter>
-            <parameter name="orderPartShipmentList" type="List">
-                <parameter name="orderPartSeqId"/>
-                <parameter name="shipmentId"/>
-                <parameter name="shipmentPackageSeqId"/>
-            </parameter>
         </out-parameters>
         <actions>
-            <set field="orderPartSeqIdList" from="[]"/>
+            <set field="orderPartIdList" from="[]"/>
             <set field="orderItemIdList" from="[]"/>
             <set field="orderPartShipmentList" from="[]"/>
             <entity-find entity-name="mantle.party.PartyRole" list="vendorInternalOrgList" cache="true">
@@ -2804,6 +2835,9 @@ and creates a purchase order for the facility to send to the dropshipper (instea
             <!-- Adapted from clone#Order -->
             <entity-find-one entity-name="mantle.order.OrderHeader" value-field="orderHeader">
                 <field-map field-name="orderId" from="baseOrderId"/></entity-find-one>
+            <if condition="!orderHeader">
+                <return error="true" message="Order ${baseOrderId} not found"/>
+            </if>
 
             <!-- clear and sequence new orderId -->
             <set field="orderHeader.orderId" from="null"/>
@@ -2908,10 +2942,11 @@ and creates a purchase order for the facility to send to the dropshipper (instea
                     <set field="value.dontCancelSetDate" from="dontCancelSetDate"/>
                 </if>
                 <entity-create value-field="value"/>
-                <set field="orderPartSeqIdList" from="orderPartSeqIdList + value.orderPartSeqId"/>
+                <set field="facility" from="facilityList.find { it.facilityId == value.facilityId }"/>
+                <set field="orderPartIdList" from="orderPartIdList + [orderPartSeqId:value.orderPartSeqId,facilityId:value.facilityId,vendorPartyId:value.vendorPartyId,dropShipRemoteId:facility.dropShipRemoteId]"/>
                 <service-call name="create#mantle.order.OrderPartParty" in-map="[orderId:orderId, orderPartSeqId:value.orderPartSeqId, partyId:valueCustomerPartyId, roleTypeId:'CustomerShipTo']"/>
             </iterate>
-            <if condition="orderPartSeqIdList.size() == 0">
+            <if condition="orderPartIdList.size() == 0">
                 <return error="true" message="No OrderParts created for Dropship Purchase Order"/>
             </if>
 
@@ -2920,7 +2955,7 @@ and creates a purchase order for the facility to send to the dropshipper (instea
             <set field="productItemTypes" from="productItemTypeEgms*.enumId"/>
 
             <iterate list="orderItemList" entry="value">
-                <if condition="!orderPartSeqIdList.contains(value.orderPartSeqId)">
+                <if condition="!orderPartIdList*.orderPartSeqId.contains(value.orderPartSeqId)">
                     <log level="warn" message="Skipping copying OrderItem ${value.orderId}:${value.orderItemSeqId} because OrderPart has no valid dropship items"/>
                     <continue/></if>
                 <if condition="productItemsOnly &amp;&amp; (!value.productId || !productItemTypes.contains(value.itemTypeEnumId))"><continue/></if>
@@ -2950,7 +2985,7 @@ and creates a purchase order for the facility to send to the dropshipper (instea
                 <if condition="clearDates"><set field="value.requiredByDate" from="requiredByDate"/></if>
                 <entity-create value-field="value"/>
                 <set field="orderItemIdList" from="orderItemIdList + [orderPartSeqId:value.orderPartSeqId,
-                    orderItemSeqId:value.orderItemSeqId, productId:value.productId]"/>
+                    orderItemSeqId:value.orderItemSeqId, productId:value.productId, facilityId:facility.facilityId]"/>
                 <service-call name="mantle.order.OrderServices.recalc#OrderItemAmount" in-map="value"/>
             </iterate>
             <if condition="!orderItemIdList">
@@ -3023,7 +3058,11 @@ and creates a purchase order for the facility to send to the dropshipper (instea
             <!-- placed when order is confirmed sent which has already happened -->
             <service-call name="mantle.order.OrderServices.place#Order" in-map="[orderId:orderId]" out-map="context"/>
             <!-- purchase order starts in approved because it is already confirmed from the customer / internal side -->
-            <service-call name="mantle.order.OrderServices.approve#Order" in-map="[orderId:orderId]" out-map="context"/>
+            <if condition="!ec.user.userAccount?.partyId"><then>
+                <service-call name="mantle.order.OrderServices.update#OrderStatus" out-map="context" in-map="context + [statusId:'OrderApproved']"/>
+            </then><else>
+                <service-call name="mantle.order.OrderServices.approve#Order" in-map="[orderId:orderId]" out-map="context"/>
+            </else></if>
         </actions>
     </service>
 
