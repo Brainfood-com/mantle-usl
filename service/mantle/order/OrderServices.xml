@@ -2834,10 +2834,6 @@ and creates a purchase order for the facility to send to the dropshipper (instea
                 <!-- don't set this on clones, used for recurring orders to track last date/time of clone/recurrence: <set field="orderHeader.lastOrderedDate" from="lastOrderedDate"/> -->
             </if>
 
-            <!-- create new OrderHeader -->
-            <entity-create value-field="orderHeader"/>
-            <set field="orderId" from="orderHeader.orderId"/>
-
             <entity-find entity-name="mantle.order.OrderPart" list="orderPartList">
                 <econdition field-name="orderId" from="baseOrderId"/>
                 <econdition field-name="vendorPartyId" operator="in" from="vendorInternalOrgList*.partyId"/></entity-find>
@@ -2871,12 +2867,16 @@ and creates a purchase order for the facility to send to the dropshipper (instea
                 <econdition field-name="facilityId" from="assetList*.facilityId"/>
                 <econdition field-name="facilityTypeEnumId" value="FcTpDropShip"/></entity-find>
             <if condition="facilityList.size() == 0">
-                <return error="true" message="No facilities ${assetList*.facilityId} found for asset reservations on order ${salesOrderId} for order items ${orderItemList*.orderItemSeqId} with assets ${assetList*.assetId}"/>
+                <return message="No facilities ${assetList*.facilityId} found for asset reservations on order ${salesOrderId} for order items ${orderItemList*.orderItemSeqId} with assets ${assetList*.assetId}"/>
             </if>
             <entity-find entity-name="mantle.party.PartyRole" list="facilityOwnerInternalOrgList">
                 <econdition field-name="partyId" operator="in" from="facilityList*.ownerPartyId"/>
                 <econdition field-name="roleTypeId" value="OrgInternal"/>
             </entity-find>
+
+            <!-- create new OrderHeader after verifying it should exist -->
+            <entity-create value-field="orderHeader"/>
+            <set field="orderId" from="orderHeader.orderId"/>
 
             <iterate list="orderPartList" entry="value">
                 <set field="value.orderId" from="orderId"/>
