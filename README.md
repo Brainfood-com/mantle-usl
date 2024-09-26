@@ -22,6 +22,7 @@ There is an overview of Mantle Business Artifacts in the **Making Apps with Moqu
 ---
 
 ### Dropshipping Setup
+Requires commit after https://github.com/moqui/mantle-usl/commit/943e8f90d59206056114f0574ac9075f5b280c07
 Difference from the standard setup:
 - Set the `Facility`'s drop-ship `facilityTypeEnumId` to `FcTpDropShip`
 - Set the `Facility`'s `assetAllowOtherOwner` to `'Y'`
@@ -45,3 +46,8 @@ Difference from the standard setup:
     </actions>
 </service>
 ```
+- Create service that will handle the shipment creation when the dropshipper calls your API (or a service-job runs on a time interval)
+For example:
+  - Receive rest call: https://github.com/moqui/mantle-shippo/blob/3c646e4492c423a47edf4c9eb4cf5995e30c9a9c/service/shippo.rest.xml#L24
+  - Create the shipment: https://github.com/moqui/mantle-shippo/blob/3c646e4492c423a47edf4c9eb4cf5995e30c9a9c/service/mantle/shippo/ShippoServices.xml#L1699
+The key here is to get the tracking number or some sort of external id from the drop-shipper so you and your customer can know when the package will arrive and if it does to keep the drop-shipper accountable for the delivery (if you need that).
