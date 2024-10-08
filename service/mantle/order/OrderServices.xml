@@ -2809,7 +2809,7 @@ and creates a purchase order for the facility to send to the dropshipper (instea
             <entity-find-one entity-name="mantle.order.OrderHeader" value-field="orderHeader">
                 <field-map field-name="orderId" from="baseOrderId"/></entity-find-one>
             <if condition="!orderHeader">
-                <return error="true" message="Order ${baseOrderId} not found"/>
+                <return/>
             </if>
 
             <!-- clear and sequence new orderId -->
@@ -2857,9 +2857,11 @@ and creates a purchase order for the facility to send to the dropshipper (instea
                     <select-field field-name="changedEntityName"/>
                 </entity-find>
                 <if condition="orderHeaderStatusCount.size() == 0">
-                    <return error="true" message="Order ${salesOrderId} has not ever been placed, cannot create Dropship Purchase Order because no asset reservations are made"/>
+                    <log message="Order ${salesOrderId} has not ever been placed, cannot create Dropship Purchase Order because no asset reservations are made"/>
+                    <return/>
                 </if>
-                <return error="true" message="Cannot create dropship order if no asset reservations exist to decide which facility and vendor to create the purchase order for order ${salesOrderId} for order items ${orderItemList*.orderItemSeqId}"/>
+<!--                <log message="Cannot create dropship order if no asset reservations exist to decide which facility and vendor to create the purchase order for order ${salesOrderId} for order items ${orderItemList*.orderItemSeqId}"/>-->
+                <return/>
             </if>
             <entity-find entity-name="mantle.product.asset.Asset" list="assetList">
                 <econdition field-name="assetId" from="reservationList*.assetId"/></entity-find>
@@ -2867,7 +2869,8 @@ and creates a purchase order for the facility to send to the dropshipper (instea
                 <econdition field-name="facilityId" from="assetList*.facilityId"/>
                 <econdition field-name="facilityTypeEnumId" value="FcTpDropShip"/></entity-find>
             <if condition="facilityList.size() == 0">
-                <return message="No facilities ${assetList*.facilityId} found for asset reservations on order ${salesOrderId} for order items ${orderItemList*.orderItemSeqId} with assets ${assetList*.assetId}"/>
+<!--                <log message="No facilities ${assetList*.facilityId} found for asset reservations on order ${salesOrderId} for order items ${orderItemList*.orderItemSeqId} with assets ${assetList*.assetId}"/>-->
+                <return/>
             </if>
             <entity-find entity-name="mantle.party.PartyRole" list="facilityOwnerInternalOrgList">
                 <econdition field-name="partyId" operator="in" from="facilityList*.ownerPartyId"/>
@@ -2922,7 +2925,8 @@ and creates a purchase order for the facility to send to the dropshipper (instea
                 <service-call name="create#mantle.order.OrderPartParty" in-map="[orderId:orderId, orderPartSeqId:value.orderPartSeqId, partyId:valueCustomerPartyId, roleTypeId:'CustomerShipTo']"/>
             </iterate>
             <if condition="orderPartIdList.size() == 0">
-                <return error="true" message="No OrderParts created for Dropship Purchase Order"/>
+                <log level="warn" message="No OrderParts created for Dropship Purchase Order"/>
+                <return/>
             </if>
 
             <entity-find entity-name="moqui.basic.EnumGroupMember" list="productItemTypeEgms" cache="true">
@@ -2964,7 +2968,8 @@ and creates a purchase order for the facility to send to the dropshipper (instea
                 <service-call name="mantle.order.OrderServices.recalc#OrderItemAmount" in-map="value"/>
             </iterate>
             <if condition="!orderItemIdList">
-                <return error="true" message="No OrderItems created for Dropship Purchase Order ${orderId} from Sales Order ${salesOrderId}"/>
+                <log level="warn" message="No OrderItems created for Dropship Purchase Order ${orderId} from Sales Order ${salesOrderId}"/>
+                <return/>
             </if>
 
             <if condition="copyContactMech">
@@ -3041,15 +3046,18 @@ and creates a purchase order for the facility to send to the dropshipper (instea
 
             <iterate list="orderPartIdList" entry="orderPart">
                 <if condition="!orderPart.dropShipRemoteId">
-                    <return error="true" message="Facility has no dropShipRemoteId. Create a SystemMessageRemote here ${ec.web?.getWebappRootUrl(false,true)?:''}/qapps/system/SystemMessage/Remote/MessageRemoteList, then go here to add it ${ec.web?.getWebappRootUrl(false,true)?:''}/qapps/tools/AutoScreen/AutoEdit/AutoEditMaster?facilityId=${orderPart.facilityId}&amp;aen=mantle.facility.Facility"/>
+                    <log level="warn" message="Facility has no dropShipRemoteId. Create a SystemMessageRemote here ${ec.web?.getWebappRootUrl(false,true)?:''}/qapps/system/SystemMessage/Remote/MessageRemoteList, then go here to add it ${ec.web?.getWebappRootUrl(false,true)?:''}/qapps/tools/AutoScreen/AutoEdit/AutoEditMaster?facilityId=${orderPart.facilityId}&amp;aen=mantle.facility.Facility"/>
+                    <return/>
                 </if>
                 <entity-find-one entity-name="moqui.service.message.SystemMessageRemote" value-field="remote"
                         auto-field-map="[systemMessageRemoteId:orderPart.dropShipRemoteId]"/>
                 <if condition="!remote">
-                    <return error="true" message="SystemMessageRemote ${orderPart.dropShipRemoteId} not found"/>
+                    <log level="warn" message="SystemMessageRemote ${orderPart.dropShipRemoteId} not found"/>
+                    <return/>
                 </if>
                 <if condition="!remote.sendServiceName">
-                    <return error="true" message="SystemMessageRemote ${orderPart.dropShipRemoteId} has no sendServiceName"/>
+                    <log level="warn" message="SystemMessageRemote ${orderPart.dropShipRemoteId} has no sendServiceName"/>
+                    <return/>
                 </if>
                 <service-call name="${remote.sendServiceName}" in-map="[orderId:orderId,orderPartSeqId:orderPart.orderPartSeqId,
                      facilityId:orderPart.facilityId]"/>

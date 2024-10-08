@@ -31,7 +31,7 @@ along with this software (see the LICENSE.md file). If not, see
         <actions>
             <service-call name="mantle.product.AssetServices.reserve#AssetsForOrder" in-map="context"/>
             <!-- Will only create DropShipPurchaseOrder if the facility of an item is properly configured a drop ship facility -->
-            <service-call name="mantle.order.OrderServices.create#DropShipPurchaseOrder" in-map="[salesOrderId:orderId]"/>
+            <if condition="orderId"><service-call name="mantle.order.OrderServices.create#DropShipPurchaseOrder" in-map="[salesOrderId:orderId]"/></if>
         </actions>
     </seca>
 
