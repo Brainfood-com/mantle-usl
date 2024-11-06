@@ -386,7 +386,8 @@ along with this software (see the LICENSE.md file). If not, see
         <in-parameters>
             <auto-parameters entity-name="mantle.account.method.PaymentMethod" include="nonpk"/>
             <parameter name="ownerPartyId" default="ec.user.userAccount.partyId"/>
-            <auto-parameters entity-name="mantle.account.method.CreditCard" include="nonpk"/>
+            <auto-parameters entity-name="mantle.account.method.CreditCard" include="nonpk">
+                <exclude field-name="cardNumberLookupHash"/></auto-parameters>
             <parameter name="expireDate" required="true">
                 <time-range after="now" format="MM/yyyy"/>
                 <!-- additional check for expireDate, may come through as only a '/' and still pass the parameter required validation,
@@ -402,12 +403,12 @@ along with this software (see the LICENSE.md file). If not, see
         </in-parameters>
         <out-parameters><parameter name="paymentMethodId" required="true"/></out-parameters>
         <actions>
+            <set field="cardNumberLookupHash" from="cardNumber ? '*'.padRight(cardNumber.length() - 4, '*') + cardNumber.substring(cardNumber.length() - 4, cardNumber.length()) : ''"/>
             <if condition="!description">
                 <entity-find-one entity-name="moqui.basic.Enumeration" value-field="creditCardTypeEnum">
                     <field-map field-name="enumId" from="creditCardTypeEnumId"/>
                 </entity-find-one>
-                <set field="cardNumberDisplay" from="cardNumber ? '*'.padRight(cardNumber.length() - 4, '*') + cardNumber.substring(cardNumber.length() - 4, cardNumber.length()) : ''"/>
-                <set field="description" from="(creditCardTypeEnum?.description ?: 'Credit Card') + ' ' + cardNumberDisplay"/>
+                <set field="description" from="(creditCardTypeEnum?.description ?: 'Credit Card') + ' ' + cardNumberLookupHash"/>
             </if>
             <entity-make-value entity-name="mantle.account.method.PaymentMethod" value-field="paymentMethod"/>
             <entity-set value-field="paymentMethod" include="nonpk"/>
@@ -436,7 +437,8 @@ along with this software (see the LICENSE.md file). If not, see
             <parameter name="paymentMethodId" required="true"/>
             <auto-parameters entity-name="mantle.account.method.PaymentMethod" include="nonpk">
                 <exclude field-name="ownerPartyId"/></auto-parameters>
-            <auto-parameters entity-name="mantle.account.method.CreditCard" include="nonpk"/>
+            <auto-parameters entity-name="mantle.account.method.CreditCard" include="nonpk">
+                <exclude field-name="cardNumberLookupHash"/></auto-parameters>
             <parameter name="validateSecurityCode"><description>Not persisted, just passed through so available to SECA rules for validation by gateway, etc</description></parameter>
         </in-parameters>
         <out-parameters><parameter name="paymentMethodId" required="true"/></out-parameters>
@@ -474,14 +476,15 @@ along with this software (see the LICENSE.md file). If not, see
                 <entity-sequenced-id-primary value-field="newPaymentMethod"/>
                 <set field="newPaymentMethod.fromDate" from="ec.user.nowTimestamp"/>
                 <set field="newPaymentMethod.originalPaymentMethodId" from="origPaymentMethod.originalPaymentMethodId ?: origPaymentMethod.paymentMethodId"/>
-                <if condition="!newPaymentMethod.description">
+                <set field="cardNumberLookupHash" from="cardNumber ? '*'.padRight(cardNumber.length() - 4, '*') + cardNumber.substring(cardNumber.length() - 4, cardNumber.length()) : ''"/>
+                <if condition="true || !newPaymentMethod.description">
                     <entity-find-one entity-name="moqui.basic.Enumeration" value-field="creditCardTypeEnum">
                         <field-map field-name="enumId" from="newCreditCard.creditCardTypeEnumId"/></entity-find-one>
-                    <set field="cardNumberDisplay" from="cardNumber ? '*'.padRight(cardNumber.length() - 4, '*') + cardNumber.substring(cardNumber.length() - 4, cardNumber.length()) : ''"/>
-                    <set field="newPaymentMethod.description" from="(creditCardTypeEnum?.description ?: 'Credit Card') + ' ' + cardNumberDisplay"/>
+                    <set field="newPaymentMethod.description" from="(creditCardTypeEnum?.description ?: 'Credit Card') + ' -x-' + cardNumberLookupHash"/>
                 </if>
                 <entity-create value-field="newPaymentMethod"/>
 
+                <set field="newCreditCard.cardNumberLookupHash" from="cardNumberLookupHash"/>
                 <set field="newCreditCard.paymentMethodId" from="newPaymentMethod.paymentMethodId"/>
                 <entity-create value-field="newCreditCard"/>
 
