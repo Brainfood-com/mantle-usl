@@ -2809,6 +2809,7 @@ and creates a purchase order for the facility to send to the dropshipper (instea
             <entity-find-one entity-name="mantle.order.OrderHeader" value-field="orderHeader">
                 <field-map field-name="orderId" from="baseOrderId"/></entity-find-one>
             <if condition="!orderHeader">
+                <log level="warn" message="Order ${salesOrderId} has no OrderHeader, cannot create Dropship Purchase Order"/>
                 <return/>
             </if>
 
@@ -2838,7 +2839,10 @@ and creates a purchase order for the facility to send to the dropshipper (instea
                 <econdition field-name="orderId" from="baseOrderId"/>
                 <econdition field-name="vendorPartyId" operator="in" from="vendorInternalOrgList*.partyId"/></entity-find>
             <!-- It is expected behavior for not every Order to be a Sales Order -->
-            <if condition="orderPartList.size() == 0"><return/></if>
+            <if condition="orderPartList.size() == 0">
+                <log level="warn" message="No OrderParts found for Dropship Purchase Order"/>
+                <return/>
+            </if>
             <entity-find entity-name="mantle.order.OrderItem" list="orderItemList">
                 <econdition field-name="orderId" from="baseOrderId"/>
                 <econdition field-name="orderPartSeqId" operator="in" from="orderPartList*.orderPartSeqId"/><order-by field-name="orderItemSeqId"/></entity-find>
@@ -2860,7 +2864,7 @@ and creates a purchase order for the facility to send to the dropshipper (instea
                     <log message="Order ${salesOrderId} has not ever been placed, cannot create Dropship Purchase Order because no asset reservations are made"/>
                     <return/>
                 </if>
-<!--                <log message="Cannot create dropship order if no asset reservations exist to decide which facility and vendor to create the purchase order for order ${salesOrderId} for order items ${orderItemList*.orderItemSeqId}"/>-->
+                <log level="warn" message="Cannot create dropship order if no asset reservations exist to decide which facility and vendor to create the purchase order for order ${salesOrderId} for order items ${orderItemList*.orderItemSeqId}"/>
                 <return/>
             </if>
             <entity-find entity-name="mantle.product.asset.Asset" list="assetList">
@@ -2869,7 +2873,7 @@ and creates a purchase order for the facility to send to the dropshipper (instea
                 <econdition field-name="facilityId" from="assetList*.facilityId"/>
                 <econdition field-name="facilityTypeEnumId" value="FcTpDropShip"/></entity-find>
             <if condition="facilityList.size() == 0">
-<!--                <log message="No facilities ${assetList*.facilityId} found for asset reservations on order ${salesOrderId} for order items ${orderItemList*.orderItemSeqId} with assets ${assetList*.assetId}"/>-->
+                <log level="warn" message="No dropship facilities ${assetList*.facilityId} found for asset reservations on order ${salesOrderId} for order items ${orderItemList*.orderItemSeqId} with assets ${assetList*.assetId}"/>
                 <return/>
             </if>
             <entity-find entity-name="mantle.party.PartyRole" list="facilityOwnerInternalOrgList">
@@ -3032,8 +3036,6 @@ and creates a purchase order for the facility to send to the dropshipper (instea
                     <entity-create value-field="value"/>
                 </iterate>
             </if>
-
-            <log level="info" message="Created Order ${orderId} as a clone of Order ${baseOrderId}"/>
 
             <!-- placed when order is confirmed sent which has already happened -->
             <service-call name="mantle.order.OrderServices.place#Order" in-map="[orderId:orderId]" out-map="context"/>
